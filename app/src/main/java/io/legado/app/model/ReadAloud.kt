@@ -12,8 +12,10 @@ import io.legado.app.help.config.AppConfig
 import io.legado.app.service.BaseReadAloudService
 import io.legado.app.service.HttpReadAloudService
 import io.legado.app.service.TTSDouBaoAloudService
+import io.legado.app.service.TTSMiMoAloudService
 import io.legado.app.service.TTSReadAloudService
 import io.legado.app.service.TTSEdgeAloudService
+import io.legado.app.service.mimo.MiMoTtsContract
 import io.legado.app.utils.LogUtils
 import io.legado.app.utils.StringUtils
 import io.legado.app.utils.postEvent
@@ -36,6 +38,9 @@ object ReadAloud {
         }
         if (ttsEngine.contains("doubao")) {
             return  TTSDouBaoAloudService::class.java
+        }
+        if (ttsEngine.contains(MiMoTtsContract.ENGINE_VALUE)) {
+            return TTSMiMoAloudService::class.java
         }
         if (StringUtils.isNumeric(ttsEngine)) {
             httpTTS = appDb.httpTTSDao.get(ttsEngine.toLong())
@@ -130,6 +135,18 @@ object ReadAloud {
             val intent = Intent(context, aloudClass)
             intent.action = IntentAction.upTtsSpeechRate
             context.startForegroundServiceCompat(intent)
+        }
+    }
+
+    fun refreshMiMoConfig(context: Context) {
+        if (!BaseReadAloudService.isRun ||
+            !ttsEngine.orEmpty().contains(MiMoTtsContract.ENGINE_VALUE)
+        ) {
+            return
+        }
+        Intent(context, TTSMiMoAloudService::class.java).also {
+            it.action = MiMoTtsContract.ACTION_CONFIG_CHANGED
+            context.startForegroundServiceCompat(it)
         }
     }
 

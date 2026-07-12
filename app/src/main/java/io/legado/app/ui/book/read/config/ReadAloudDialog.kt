@@ -80,6 +80,10 @@ class ReadAloudDialog : BaseDialogFragment(R.layout.dialog_read_aloud) {
             ivSetting.setColorFilter(textColor)
             tvSetting.setTextColor(textColor)
             cbTtsFollowSys.setTextColor(textColor)
+            ivGoAloudPage.setColorFilter(textColor)
+            tvGoAloudPage.setTextColor(textColor)
+            ivReadFromPage.setColorFilter(textColor)
+            tvReadFromPage.setTextColor(textColor)
         }
         initData()
         initEvent()
@@ -110,6 +114,12 @@ class ReadAloudDialog : BaseDialogFragment(R.layout.dialog_read_aloud) {
         ivPlayPause.setOnClickListener { callBack?.onClickReadAloud() }
         ivPlayPrev.setOnClickListener { ReadAloud.prevParagraph(requireContext()) }
         ivPlayNext.setOnClickListener { ReadAloud.nextParagraph(requireContext()) }
+        llGoAloudPage.setOnClickListener {
+            ReadBook.goToAloudPage()
+        }
+        llReadFromPage.setOnClickListener {
+            ReadBook.readAloudFromCurrentPage()
+        }
         llCatalog.setOnClickListener { callBack?.openChapterList() }
         llToBackstage.setOnClickListener { callBack?.finish() }
         cbTtsFollowSys.setOnCheckedChangeListener { _, isChecked ->

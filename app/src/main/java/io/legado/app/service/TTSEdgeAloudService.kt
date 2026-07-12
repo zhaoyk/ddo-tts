@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.content.Context
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.net.toUri
 import androidx.lifecycle.lifecycleScope
@@ -32,12 +33,16 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Dispatchers.Main
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
@@ -51,6 +56,16 @@ import kotlin.coroutines.coroutineContext
  */
 @SuppressLint("UnsafeOptInUsageError")
 class TTSEdgeAloudService : BaseReadAloudService(), Player.Listener {
+
+    private companion object {
+        private const val EDGE_FETCH_TOTAL_TIMEOUT_MS = 240_000L
+        private const val SLOW_NETWORK_TOAST_MS = 30_000L
+        private const val MAX_FETCH_ATTEMPTS = 3
+        private val RETRY_DELAYS_MS = longArrayOf(2_000L, 5_000L)
+        private const val EDGE_TTS_BUFFERING_MESSAGE = "网络较慢，正在缓冲朗读音频"
+        private const val EDGE_TTS_NETWORK_FAIL_MESSAGE =
+            "Edge大声朗读网络较差，获取音频失败，请稍后重试"
+    }
 
     private val exoPlayer: ExoPlayer by lazy {
         val dataSourceFactory = ByteArrayDataSourceFactory(audioCache)
@@ -92,6 +107,7 @@ class TTSEdgeAloudService : BaseReadAloudService(), Player.Listener {
     override fun onDestroy() {
         super.onDestroy()
         downloadTask?.cancel()
+        edgeSpeakFetch.cancelCurrent()
         exoPlayer.release()
         edgeSpeakFetch.release()
         removeAllCache()
@@ -111,6 +127,8 @@ class TTSEdgeAloudService : BaseReadAloudService(), Player.Listener {
     }
 
     override fun playStop() {
+        downloadTask?.cancel()
+        edgeSpeakFetch.cancelCurrent()
         exoPlayer.stop()
         playIndexJob?.cancel()
     }
@@ -130,6 +148,7 @@ class TTSEdgeAloudService : BaseReadAloudService(), Player.Listener {
         exoPlayer.clearMediaItems()
         Log.d(tag, "clearMediaItems audioCache Size= ${audioCache.size}")
         downloadTask?.cancel()
+        edgeSpeakFetch.cancelCurrent()
         downloadTask = execute {
             downloadTaskActiveLock.withLock {
                 ensureActive()
@@ -147,10 +166,17 @@ class TTSEdgeAloudService : BaseReadAloudService(), Player.Listener {
                         runCatching {
                             getSpeakStream(speakText, fileName)
                         }.onFailure {
-                            Log.e(tag, "downloadAndPlayAudios runCatch onFailure")
+                            Log.e(tag, "downloadAndPlayAudios runCatch onFailure", it)
                             when (it) {
                                 is CancellationException -> Unit
-                                else -> pauseReadAloud()
+                                else -> {
+                                    toastOnUi(EDGE_TTS_NETWORK_FAIL_MESSAGE)
+                                    AppLog.put(
+                                        "$EDGE_TTS_NETWORK_FAIL_MESSAGE\n${it.localizedMessage}",
+                                        it
+                                    )
+                                    pauseReadAloud()
+                                }
                             }
                             return@execute
                         }
@@ -161,9 +187,7 @@ class TTSEdgeAloudService : BaseReadAloudService(), Player.Listener {
                         .setUri("memory://media/$fileName".toUri())
                         .setMediaId(fileName)
                         .build()
-                    launch(Main) {
-                        exoPlayer.addMediaItem(mediaItem)
-                    }
+                    addMediaItem(mediaItem)
                 }
                 preDownloadAudios()
             }
@@ -184,32 +208,111 @@ class TTSEdgeAloudService : BaseReadAloudService(), Player.Listener {
             val speakText = content.replace(AppPattern.notReadAloudRegex, "")
             if (!isCached(fileName)) {
                 runCatching {
-                    getSpeakStream(speakText, fileName)
+                    getSpeakStream(speakText, fileName, notifySlowNetwork = false)
                     Log.i(tag, "pre预下载音频===> $speakText MD5:$fileName")
                 }.onFailure {
-                    Log.e(tag, "preDownloadAudios runCatch onFailure")
+                    Log.e(tag, "preDownloadAudios runCatch onFailure", it)
                 }
             }
         }
     }
 
-    private suspend fun getSpeakStream(speakText: String, fileName: String): String {
+    private suspend fun getSpeakStream(
+        speakText: String,
+        fileName: String,
+        notifySlowNetwork: Boolean = true
+    ): String {
         if (speakText.isEmpty()) {
             cacheAudio(fileName, silentBytes)
-            return "fail"
+            return "success"
+        }
+        var lastError: Throwable? = null
+        val deadline = SystemClock.elapsedRealtime() + EDGE_FETCH_TOTAL_TIMEOUT_MS
+        val slowNetworkToastJob = if (notifySlowNetwork) {
+            lifecycleScope.launch {
+                delay(SLOW_NETWORK_TOAST_MS)
+                toastOnUi(EDGE_TTS_BUFFERING_MESSAGE)
+            }
+        } else {
+            null
         }
         try {
-            return withContext(Dispatchers.IO) {
-                val voice = getVoiceValue()
-                val inputStream = edgeSpeakFetch.synthesizeText(speakText, speechRate,voice)
-                cacheAudio(fileName, inputStream)
-                "success"
+            repeat(MAX_FETCH_ATTEMPTS) { index ->
+                val remainingMillis = deadline - SystemClock.elapsedRealtime()
+                if (remainingMillis <= 0) {
+                    throw IOException(
+                        "Edge TTS 合成超时(${EDGE_FETCH_TOTAL_TIMEOUT_MS / 1000}秒)",
+                        lastError
+                    )
+                }
+                try {
+                    val voice = getVoiceValue()
+                    val bytes = fetchSpeakBytes(speakText, voice, remainingMillis)
+                    if (bytes.isEmpty()) {
+                        throw IOException("Edge TTS 未返回音频数据")
+                    }
+                    cacheAudio(fileName, bytes)
+                    return "success"
+                } catch (e: CancellationException) {
+                    if (e is TimeoutCancellationException) {
+                        edgeSpeakFetch.cancelCurrent()
+                        lastError = IOException(
+                            "Edge TTS 合成超时(${EDGE_FETCH_TOTAL_TIMEOUT_MS / 1000}秒)",
+                            e
+                        )
+                    } else {
+                        throw e
+                    }
+                } catch (e: Exception) {
+                    lastError = e
+                    edgeSpeakFetch.cancelCurrent()
+                }
+                Log.i(tag, "edgeSpeakFetch失败, retry=${index + 1}: $lastError")
+                if (index < MAX_FETCH_ATTEMPTS - 1) {
+                    val retryDelay = minOf(
+                        RETRY_DELAYS_MS[index],
+                        deadline - SystemClock.elapsedRealtime()
+                    )
+                    if (retryDelay > 0) {
+                        delay(retryDelay)
+                    }
+                }
             }
-        } catch (e: Exception) {
-            Log.i(tag, "edgeSpeakFetch失败: $e")
-            cacheAudio(fileName, silentBytes)
+        } finally {
+            slowNetworkToastJob?.cancel()
         }
-        return "fail"
+        throw IOException("Edge TTS 拉取音频失败", lastError)
+    }
+
+    private suspend fun fetchSpeakBytes(
+        speakText: String,
+        voice: String,
+        timeoutMillis: Long
+    ): ByteArray = coroutineScope {
+        val fetchJob = async(Dispatchers.IO) {
+            edgeSpeakFetch.synthesizeText(speakText, speechRate, voice).use {
+                it.toByteArray()
+            }
+        }
+        try {
+            withTimeout(timeoutMillis) {
+                fetchJob.await()
+            }
+        } catch (e: TimeoutCancellationException) {
+            edgeSpeakFetch.cancelCurrent()
+            fetchJob.cancel()
+            throw e
+        } finally {
+            if (!fetchJob.isCompleted) {
+                fetchJob.cancel()
+            }
+        }
+    }
+
+    private suspend fun addMediaItem(mediaItem: MediaItem) {
+        withContext(Main) {
+            exoPlayer.addMediaItem(mediaItem)
+        }
     }
 
     private fun md5SpeakFileName(content: String): String {
@@ -263,8 +366,8 @@ class TTSEdgeAloudService : BaseReadAloudService(), Player.Listener {
                     )
                 ) {
                     pageIndex++
-                    ReadBook.moveToNextPage()
                     upTtsProgress(readAloudNumber + i.toInt())
+                    ReadBook.moveToNextPage()
                 }
                 delay(sleep)
             }
@@ -276,6 +379,7 @@ class TTSEdgeAloudService : BaseReadAloudService(), Player.Listener {
      */
     override fun upSpeechRate(reset: Boolean) {
         downloadTask?.cancel()
+        edgeSpeakFetch.cancelCurrent()
         exoPlayer.stop()
         speechRate = AppConfig.speechRatePlay + 5
         downloadAndPlayAudios()
@@ -289,6 +393,7 @@ class TTSEdgeAloudService : BaseReadAloudService(), Player.Listener {
         removeAllCache()
         previousMediaId = ""
         downloadTask?.cancel()
+        edgeSpeakFetch.cancelCurrent()
         exoPlayer.stop()
         downloadAndPlayAudios()
     }

@@ -22,8 +22,6 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.regex.Pattern
 
-private lateinit var wss: WebSocket
-
 class EdgeSpeakFetch {
     // 常量定义
     companion object {
@@ -92,29 +90,19 @@ class EdgeSpeakFetch {
         }
     }
 
-    private var lastTime: Long = 0
-    private var isReconnect = false
-    private lateinit var lastWss: WebSocket
+    @Volatile
+    private var currentWss: WebSocket? = null
     private var audioOutputStream = PipedOutputStream()
     private var audioInputStream = PipedInputStream(audioOutputStream, 8192)
     private var client = OkHttpClient.Builder()
-        .connectTimeout(50, TimeUnit.SECONDS)
-        .readTimeout(80, TimeUnit.SECONDS)
-        .writeTimeout(50, TimeUnit.SECONDS)
+        .connectTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(180, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .pingInterval(60, TimeUnit.SECONDS)
         .build()
 
 
     private fun getWssConnect(ssml: String) {
-        if (::wss.isInitialized) {
-            try {
-                wss.close(1000, "正常关闭")
-                wss.cancel()
-                Log.i(TAG, "关闭 WebsocketConnect")
-            } catch (e: Exception) {
-                Log.i(TAG, "关闭 WebsocketConnect Exception: $e")
-                e.printStackTrace()
-            }
-        }
         Log.i(TAG, "重新生成 WebsocketConnect")
         val clockSkewSeconds = 0.0
         val secMsGec = generateSecMsGec(clockSkewSeconds)
@@ -140,23 +128,21 @@ class EdgeSpeakFetch {
         }
         // 5. 构建最终请求
         val request = requestBuilder.build()
+        val outputStream = audioOutputStream
 
         val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 Log.i(TAG, "WebSocket onOpen")
-                wss = webSocket
-                isReconnect = false
-                sendSpeechConfig(wss)
-                sendSSMLMessage(wss, ssml)
+                currentWss = webSocket
+                sendSpeechConfig(webSocket)
+                sendSSMLMessage(webSocket, ssml)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 // 检测turn.end并关闭流
                 if (text.contains("turn.end")) {
                     Log.i(TAG, "收到turn.end 关闭流")
-                    audioOutputStream.close()
-                    lastTime = System.currentTimeMillis()
-                    lastWss = webSocket
+                    closeAudioStream(outputStream, "Edge TTS 收到 turn.end")
 
                 }
             }
@@ -190,8 +176,8 @@ class EdgeSpeakFetch {
                     // 音频数据
                     if (audioData.isNotEmpty()) {
                         try {
-                            audioOutputStream.write(audioData)
-                            audioOutputStream.flush()
+                            outputStream.write(audioData)
+                            outputStream.flush()
                         } catch (e: IOException) {
                             Log.e(TAG, "缓存音频失败", e)
                         }
@@ -204,7 +190,7 @@ class EdgeSpeakFetch {
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 Log.i(TAG, "WebSocket onClosed$code$reason")
-                isReconnect = true
+                closeAudioStream(outputStream, "Edge TTS WebSocket 关闭")
             }
 
             override fun onFailure(
@@ -212,13 +198,13 @@ class EdgeSpeakFetch {
                 t: Throwable,
                 response: Response?
             ) {
-                isReconnect = true
                 Log.i(TAG, "WebSocket onFailure: $t $response")
+                closeAudioStream(outputStream, "Edge TTS WebSocket 失败", t)
 
             }
 
         }
-        client.newWebSocket(request, listener)
+        currentWss = client.newWebSocket(request, listener)
     }
 
     // 移除文本中的特殊字符和表情，保留常用文章标点符号
@@ -237,31 +223,40 @@ class EdgeSpeakFetch {
         }
     }
 
+    private fun closeAudioStream(reason: String, throwable: Throwable? = null) {
+        closeAudioStream(audioOutputStream, reason, throwable)
+    }
+
+    private fun closeAudioStream(
+        outputStream: PipedOutputStream,
+        reason: String,
+        throwable: Throwable? = null
+    ) {
+        try {
+            outputStream.close()
+            Log.i(TAG, "$reason, 管道流已关闭")
+        } catch (e: IOException) {
+            Log.e(TAG, "$reason, 关闭管道流失败", throwable ?: e)
+        }
+    }
+
 
     fun synthesizeText(
         speakText: String,
         rate: Int,
         voice: String = DEFAULT_VOICE
     ): InputStream {
+        cancelCurrent()
         initStream()
         Log.i(TAG, "speakText: $speakText")
         try {
             val speakTextStr = removeSpecialCharacters(speakText)
-            val currentTime = System.currentTimeMillis()
-            val timeDiff = currentTime - lastTime
-            // 判断是否超过毫秒
             val ssml = mkSSML(speakTextStr, voice, processRate(rate))
-
-            if (timeDiff < 500 && !isReconnect) {
-                Log.i(TAG, "复用使用上次lastWss")
-                wss = lastWss
-                sendSSMLMessage(wss, ssml)
-            } else {
-                getWssConnect(ssml)
-                Log.i(TAG, "重新生成websocket, sendSpeechConfig")
-            }
+            getWssConnect(ssml)
+            Log.i(TAG, "重新生成websocket, sendSpeechConfig")
         } catch (e: Exception) {
             Log.i(TAG, "sendSSMLMessage:$e")
+            closeAudioStream("发送 Edge TTS 请求失败", e)
         }
         return audioInputStream
     }
@@ -335,12 +330,22 @@ class EdgeSpeakFetch {
     }
 
     fun release() {
-        if (::lastWss.isInitialized) lastWss.cancel()
+        cancelCurrent()
         try {
-            audioOutputStream.close()
+            audioInputStream.close()
             Log.i(TAG, "管道流已关闭")
         } catch (e: IOException) {
             Log.e(TAG, "关闭管道流失败", e)
         }
+    }
+
+    fun cancelCurrent() {
+        try {
+            currentWss?.cancel()
+            currentWss = null
+        } catch (e: Exception) {
+            Log.i(TAG, "取消 Edge TTS WebSocket 失败: $e")
+        }
+        closeAudioStream("取消 Edge TTS 当前请求")
     }
 }

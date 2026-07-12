@@ -203,9 +203,11 @@ class TTSReadAloudService : BaseReadAloudService(), TextToSpeech.OnInitListener 
                     && readAloudNumber + 1 > it.getReadLength(pageIndex + 1)
                 ) {
                     pageIndex++
+                    upTtsProgress(readAloudNumber + 1)
                     ReadBook.moveToNextPage()
+                } else {
+                    upTtsProgress(readAloudNumber + 1)
                 }
-                upTtsProgress(readAloudNumber + 1)
             }
         }
 
@@ -224,8 +226,8 @@ class TTSReadAloudService : BaseReadAloudService(), TextToSpeech.OnInitListener 
                     && readAloudNumber + start > it.getReadLength(pageIndex + 1)
                 ) {
                     pageIndex++
-                    ReadBook.moveToNextPage()
                     upTtsProgress(readAloudNumber + start)
+                    ReadBook.moveToNextPage()
                 }
             }
         }

@@ -42,6 +42,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collect
@@ -59,6 +60,12 @@ import kotlin.math.min
 
 @Suppress("MemberVisibilityCanBePrivate")
 object ReadBook : CoroutineScope by MainScope() {
+    data class AloudChapterSnapshot(
+        val bookIdentity: String,
+        val chapterIndex: Int,
+        val textChapter: TextChapter
+    )
+
     var book: Book? = null
     var callBack: CallBack? = null
     var inBookshelf = false
@@ -66,6 +73,12 @@ object ReadBook : CoroutineScope by MainScope() {
     var simulatedChapterSize = 0
     var durChapterIndex = 0
     var durChapterPos = 0
+    /** 视图是否跟随朗读进度；手动翻页后为 false */
+    var aloudSyncView = false
+    /** TTS 自动切章时允许 curPageChanged 触发 readAloud */
+    var allowTtsChapterChange = false
+    /** 正在跳转到朗读位置，勿将此次导航视为用户手动浏览 */
+    var navigatingToAloudPage = false
     var isLocalBook = true
     var chapterChanged = false
     var prevTextChapter: TextChapter? = null
@@ -94,6 +107,57 @@ object ReadBook : CoroutineScope by MainScope() {
     val downloadScope = CoroutineScope(SupervisorJob() + IO)
     val preDownloadSemaphore = Semaphore(2)
     val executor = globalExecutor
+
+    fun aloudBookIdentity(value: Book? = book): String = value?.let {
+        "${it.origin.length}:${it.origin}${it.bookUrl}"
+    }.orEmpty()
+
+    /** Loads a laid-out TTS chapter without changing the viewed chapter state. */
+    suspend fun loadAloudChapterSnapshot(
+        expectedBookIdentity: String,
+        chapterIndex: Int
+    ): AloudChapterSnapshot? = withContext(IO) {
+        coroutineScope {
+            val capturedBook = book?.copy() ?: return@coroutineScope null
+            if (aloudBookIdentity(capturedBook) != expectedBookIdentity) return@coroutineScope null
+            if (chapterIndex !in 0 until simulatedChapterSize) return@coroutineScope null
+            val capturedChapterSize = simulatedChapterSize
+            val chapter = appDb.bookChapterDao.getChapter(capturedBook.bookUrl, chapterIndex)
+                ?: return@coroutineScope null
+            val content = BookHelp.getContent(capturedBook, chapter) ?: run {
+                val source = bookSource
+                    ?.takeIf { aloudBookIdentity(book) == expectedBookIdentity }
+                    ?: return@coroutineScope null
+                CacheBook.getOrCreate(source, capturedBook).downloadAwait(chapter)
+            }
+            ensureActive()
+            if (aloudBookIdentity(book) != expectedBookIdentity) return@coroutineScope null
+            val processor = ContentProcessor.get(capturedBook.name, capturedBook.origin)
+            val displayTitle = chapter.getDisplayTitle(
+                processor.getTitleReplaceRules(),
+                capturedBook.getUseReplaceRule()
+            )
+            val processed = processor.getContent(
+                capturedBook,
+                chapter,
+                content,
+                includeTitle = false
+            )
+            ensureActive()
+            val snapshotChapter = ChapterProvider.getTextChapterAsync(
+                this,
+                capturedBook,
+                chapter,
+                displayTitle,
+                processed,
+                capturedChapterSize
+            )
+            snapshotChapter.layoutChannel.receiveAsFlow().collect()
+            ensureActive()
+            if (aloudBookIdentity(book) != expectedBookIdentity) return@coroutineScope null
+            AloudChapterSnapshot(expectedBookIdentity, chapterIndex, snapshotChapter)
+        }
+    }
 
     fun resetData(book: Book) {
         releaseAndCancel()
@@ -302,30 +366,40 @@ object ReadBook : CoroutineScope by MainScope() {
     }
 
     fun moveToNextPage(): Boolean {
+        if (BaseReadAloudService.isRun) {
+            tryAutoRejoinAloudSync()
+        }
         var hasNextPage = false
         curTextChapter?.let {
             val nextPagePos = it.getNextPageLength(durChapterPos)
             if (nextPagePos >= 0) {
                 hasNextPage = true
-                it.getPage(durPageIndex)?.removePageAloudSpan()
-                durChapterPos = nextPagePos
-                callBack?.cancelSelect()
-                callBack?.upContent()
-                saveRead(true)
+                if (aloudSyncView) {
+                    it.getPage(durPageIndex)?.removePageAloudSpan()
+                    durChapterPos = nextPagePos
+                    callBack?.cancelSelect()
+                    callBack?.upContent()
+                    saveRead(true)
+                }
             }
         }
         return hasNextPage
     }
 
     fun moveToPrevPage(): Boolean {
+        if (BaseReadAloudService.isRun) {
+            tryAutoRejoinAloudSync()
+        }
         var hasPrevPage = false
         curTextChapter?.let {
             val prevPagePos = it.getPrevPageLength(durChapterPos)
             if (prevPagePos >= 0) {
                 hasPrevPage = true
-                durChapterPos = prevPagePos
-                callBack?.upContent()
-                saveRead(true)
+                if (aloudSyncView) {
+                    durChapterPos = prevPagePos
+                    callBack?.upContent()
+                    saveRead(true)
+                }
             }
         }
         return hasPrevPage
@@ -419,19 +493,76 @@ object ReadBook : CoroutineScope by MainScope() {
     }
 
     fun skipToPage(index: Int, success: (() -> Unit)? = null) {
+        if (BaseReadAloudService.isRun && !navigatingToAloudPage) {
+            aloudSyncView = false
+        }
         durChapterPos = curTextChapter?.getReadLength(index) ?: index
         callBack?.upContent {
             success?.invoke()
         }
-        curPageChanged()
+        curPageChanged(pageChanged = !navigatingToAloudPage)
         saveRead(true)
     }
 
     fun setPageIndex(index: Int) {
         recycleRecorders(durPageIndex, index)
-        durChapterPos = curTextChapter?.getReadLength(index) ?: index
-        saveRead(true)
-        curPageChanged(true)
+        if (shouldRejoinAloudSync(index)) {
+            aloudSyncView = true
+            durChapterPos = BaseReadAloudService.aloudChapterPos
+            saveRead(true)
+            callBack?.pageChanged()
+            upReadTime()
+            preDownload()
+            refreshAloudViewSync()
+        } else {
+            durChapterPos = curTextChapter?.getReadLength(index) ?: index
+            if (BaseReadAloudService.isRun) {
+                aloudSyncView = false
+            }
+            saveRead(true)
+            curPageChanged(true)
+        }
+    }
+
+    /**
+     * 朗读进度追上用户当前所见页时，自动恢复视图跟随
+     */
+    fun tryAutoRejoinAloudSync(chapterPos: Int = BaseReadAloudService.aloudChapterPos): Boolean {
+        if (!isViewingAloudPage(chapterPos)) return false
+        aloudSyncView = true
+        return true
+    }
+
+    /**
+     * 用户当前所见页是否为指定朗读位置所在页
+     */
+    private fun isViewingAloudPage(chapterPos: Int): Boolean {
+        if (!BaseReadAloudService.isRun) return false
+        if (durChapterIndex != BaseReadAloudService.aloudChapterIndex) return false
+        val textChapter = curTextChapter ?: return false
+        if (chapterPos < 0) return false
+        val aloudPageIndex = textChapter.getPageIndexByCharIndex(chapterPos)
+        return aloudPageIndex == durPageIndex
+    }
+
+    /**
+     * 用户是否翻到了朗读正在播放的页面
+     */
+    private fun shouldRejoinAloudSync(pageIndex: Int): Boolean {
+        if (!BaseReadAloudService.isRun) return false
+        if (durChapterIndex != BaseReadAloudService.aloudChapterIndex) return false
+        val textChapter = curTextChapter ?: return false
+        val aloudPageIndex = textChapter.getPageIndexByCharIndex(BaseReadAloudService.aloudChapterPos)
+        return pageIndex == aloudPageIndex
+    }
+
+    /**
+     * 恢复视图跟随朗读并刷新当前朗读高亮
+     */
+    fun refreshAloudViewSync() {
+        if (!BaseReadAloudService.isRun) return
+        aloudSyncView = true
+        callBack?.refreshAloudSpan()
     }
 
     fun recycleRecorders(beforeIndex: Int, afterIndex: Int) {
@@ -455,6 +586,9 @@ object ReadBook : CoroutineScope by MainScope() {
         upContent: Boolean = true,
         success: (() -> Unit)? = null
     ) {
+        if (BaseReadAloudService.isRun && !navigatingToAloudPage) {
+            aloudSyncView = false
+        }
         if (index < chapterSize) {
             clearTextChapter()
             if (upContent) callBack?.upContent()
@@ -474,11 +608,14 @@ object ReadBook : CoroutineScope by MainScope() {
         callBack?.pageChanged()
         curTextChapter?.let {
             if (BaseReadAloudService.isRun && it.isCompleted) {
-                val scrollPageAnim = pageAnim() == 3
-                if (scrollPageAnim && pageChanged) {
-                    ReadAloud.pause(appCtx)
-                } else {
-                    readAloud(!BaseReadAloudService.pause)
+                when {
+                    pageChanged && !navigatingToAloudPage -> {
+                        aloudSyncView = false
+                    }
+
+                    !pageChanged && allowTtsChapterChange -> {
+                        readAloud(!BaseReadAloudService.pause)
+                    }
                 }
             }
         }
@@ -493,7 +630,65 @@ object ReadBook : CoroutineScope by MainScope() {
         book ?: return
         val textChapter = curTextChapter ?: return
         if (textChapter.isCompleted) {
+            aloudSyncView = true
             ReadAloud.play(appCtx, play, startPos = startPos)
+        }
+    }
+
+    /**
+     * 跳转到当前朗读进度所在页
+     */
+    fun goToAloudPage(success: (() -> Unit)? = null) {
+        if (!BaseReadAloudService.isRun) return
+        val chapterIndex = BaseReadAloudService.aloudChapterIndex
+        val chapterPos = BaseReadAloudService.aloudChapterPos
+        navigatingToAloudPage = true
+        aloudSyncView = true
+        if (durChapterIndex != chapterIndex) {
+            openChapter(chapterIndex, chapterPos, upContent = true) {
+                navigatingToAloudPage = false
+                aloudSyncView = true
+                refreshAloudViewSync()
+                success?.invoke()
+            }
+        } else {
+            durChapterPos = chapterPos
+            val pageIndex = curTextChapter?.getPageIndexByCharIndex(chapterPos) ?: 0
+            recycleRecorders(durPageIndex, pageIndex)
+            saveRead(true)
+            callBack?.upContent(resetPageOffset = false) {
+                navigatingToAloudPage = false
+                aloudSyncView = true
+                refreshAloudViewSync()
+                success?.invoke()
+            }
+        }
+    }
+
+    /**
+     * 从当前浏览页开始朗读
+     */
+    fun readAloudFromCurrentPage() {
+        aloudSyncView = true
+        readAloud(play = true, startPos = 0)
+    }
+
+    /**
+     * 朗读自动进入下一章（视图未跟随时，不改动用户当前章节）
+     */
+    fun playAloudChapter(chapterIndex: Int, startPos: Int = 0) {
+        if (!BaseReadAloudService.isRun) return
+        if (chapterIndex >= simulatedChapterSize) return
+        val viewIndex = durChapterIndex
+        val viewPos = durChapterPos
+        navigatingToAloudPage = true
+        openChapter(chapterIndex, 0, upContent = false) {
+            readAloud(play = true, startPos = startPos)
+            navigatingToAloudPage = true
+            openChapter(viewIndex, viewPos, upContent = true) {
+                navigatingToAloudPage = false
+                aloudSyncView = false
+            }
         }
     }
 
@@ -1049,6 +1244,8 @@ object ReadBook : CoroutineScope by MainScope() {
         fun sureNewProgress(progress: BookProgress)
 
         fun cancelSelect()
+
+        fun refreshAloudSpan()
     }
 
 }

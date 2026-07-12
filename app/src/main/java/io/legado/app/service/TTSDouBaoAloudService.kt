@@ -385,8 +385,8 @@ class TTSDouBaoAloudService : BaseReadAloudService(), Player.Listener {
                     )
                 ) {
                     pageIndex++
-                    ReadBook.moveToNextPage()
                     upTtsProgress(readAloudNumber + i.toInt())
+                    ReadBook.moveToNextPage()
                 }
                 delay(sleep)
             }

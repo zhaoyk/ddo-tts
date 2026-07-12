@@ -34,6 +34,7 @@ import io.legado.app.lib.dialogs.alert
 import io.legado.app.lib.theme.primaryColor
 import io.legado.app.model.ReadAloud
 import io.legado.app.model.ReadBook
+import io.legado.app.service.mimo.MiMoTtsContract
 import io.legado.app.ui.association.ImportHttpTtsDialog
 import io.legado.app.ui.file.HandleFileContract
 import io.legado.app.ui.login.SourceLoginActivity
@@ -223,6 +224,24 @@ class SpeakEngineDialog() : BaseDialogFragment(R.layout.dialog_recycler_view),
                 }
             }
 
+        }
+        adapter.addHeaderView {
+            ItemHttpTtsBinding.inflate(layoutInflater, recyclerView, false).apply {
+                sysTtsViews.add(cbName)
+                ivEdit.visible()
+                ivMenuDelete.gone()
+                labelSys.gone()
+                cbName.setText(R.string.mimo_tts)
+                cbName.tag = MiMoTtsContract.ENGINE_VALUE
+                cbName.isChecked = GSON.fromJsonObject<SelectItem<String>>(ttsEngine)
+                    .getOrNull()?.value == cbName.tag
+                cbName.setOnClickListener {
+                    upTts(GSON.toJson(SelectItem(getString(R.string.mimo_tts), MiMoTtsContract.ENGINE_VALUE)))
+                }
+                ivEdit.setOnClickListener {
+                    showDialogFragment<MiMoTtsConfigDialog>()
+                }
+            }
         }
         adapter.addHeaderView {
             ItemHttpTtsBinding.inflate(layoutInflater, recyclerView, false).apply {

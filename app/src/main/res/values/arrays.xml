@@ -185,4 +185,16 @@
 		<item>Customize</item>
 	</string-array>
 
+	<string-array name="mimo_voice_entries">
+		<item>MiMo Default</item>
+		<item>冰糖 · Chinese · Female</item>
+		<item>茉莉 · Chinese · Female</item>
+		<item>苏打 · Chinese · Male</item>
+		<item>白桦 · Chinese · Male</item>
+		<item>Mia · English · Female</item>
+		<item>Chloe · English · Female</item>
+		<item>Milo · English · Male</item>
+		<item>Dean · English · Male</item>
+	</string-array>
+
 </resources>

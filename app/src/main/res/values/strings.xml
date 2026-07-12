@@ -142,6 +142,8 @@
     <string name="previous_chapter">Prior</string>
     <string name="pt_hide_status_bar">Hide status bar</string>
     <string name="ps_hide_status_bar">Hide system navigation bar when reading</string>
+    <string name="go_to_aloud_page">Go to speech page</string>
+    <string name="read_aloud_from_this_page">Read from this page</string>
     <string name="read_aloud">Speech</string>
     <string name="read_aloud_t">Speaking</string>
     <string name="read_aloud_s">Click to open the Reading</string>
@@ -1235,4 +1237,20 @@
     <string name="auto_check_new_backup_t">自动检查新备份</string>
     <string name="auto_check_new_backup_s">打开软件时检查是否有新备份，有新备份时提示是否更新</string>
     <string name="sys_image_picker">系统图片选择器</string>
+    <string name="mimo_tts_buffering">MiMo is generating speech audio</string>
+    <string name="mimo_tts_missing_key">Configure a MiMo API Key before reading</string>
+    <string name="mimo_tts_auth_error">MiMo API Key is invalid or lacks permission</string>
+    <string name="mimo_tts_bad_request">MiMo rejected this text or configuration</string>
+    <string name="mimo_tts_rate_limited">MiMo quota or rate limit was reached</string>
+    <string name="mimo_tts_network_error">MiMo audio could not be generated; check the network and retry</string>
+    <string name="mimo_tts_response_error">MiMo returned invalid audio</string>
+    <string name="mimo_tts_playback_error">MiMo audio could not be played</string>
+    <string name="mimo_tts">MiMo TTS</string>
+    <string name="mimo_api_key">MiMo API Key</string>
+    <string name="mimo_voice">Preset voice</string>
+    <string name="mimo_global_style">Global reading style</string>
+    <string name="mimo_book_style">Reading style for this book</string>
+    <string name="mimo_style_help">A style is performance guidance and is not spoken. A blank book style inherits the global style.</string>
+    <string name="mimo_clear_book_style">Clear book style</string>
+    <string name="mimo_book_style_inherited">This book now inherits the global style</string>
 </resources>

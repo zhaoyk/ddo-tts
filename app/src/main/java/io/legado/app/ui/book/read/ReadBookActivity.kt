@@ -1060,6 +1060,26 @@ class ReadBookActivity : BaseReadBookActivity(),
         }
     }
 
+    override fun refreshAloudSpan() {
+        applyAloudSpan(BaseReadAloudService.aloudChapterPos)
+    }
+
+    private fun applyAloudSpan(chapterStart: Int) {
+        lifecycleScope.launch(IO) {
+            if (!BaseReadAloudService.isRun) return@launch
+            ReadBook.tryAutoRejoinAloudSync(chapterStart)
+            if (!ReadBook.aloudSyncView) return@launch
+            if (ReadBook.durChapterIndex != BaseReadAloudService.aloudChapterIndex) return@launch
+            ReadBook.curTextChapter?.let { textChapter ->
+                ReadBook.durChapterPos = chapterStart
+                val pageIndex = textChapter.getPageIndexByCharIndex(chapterStart)
+                val aloudSpanStart = chapterStart - textChapter.getReadLength(pageIndex)
+                textChapter.getPage(pageIndex)?.upPageAloudSpan(aloudSpanStart)
+                upContent()
+            }
+        }
+    }
+
     /**
      * 更新进度条位置
      */
@@ -1350,26 +1370,8 @@ class ReadBookActivity : BaseReadBookActivity(),
             }
 
             BaseReadAloudService.pause -> {
-                val scrollPageAnim = ReadBook.pageAnim() == 3
-                if (scrollPageAnim && pageChanged) {
-                    pageChanged = false
-                    val pos = binding.readView.getReadAloudPos()
-                    if (pos != null) {
-                        val (index, line) = pos
-                        if (ReadBook.durChapterIndex != index) {
-                            ReadBook.openChapter(index, line.chapterPosition, false) {
-                                ReadBook.readAloud(startPos = line.pagePosition)
-                            }
-                        } else {
-                            ReadBook.durChapterPos = line.chapterPosition
-                            ReadBook.readAloud(startPos = line.pagePosition)
-                        }
-                    } else {
-                        ReadBook.readAloud()
-                    }
-                } else {
-                    ReadAloud.resume(this)
-                }
+                pageChanged = false
+                ReadAloud.resume(this)
             }
 
             else -> ReadAloud.pause(this)
@@ -1656,7 +1658,7 @@ class ReadBookActivity : BaseReadBookActivity(),
             }
         }
         observeEvent<Int>(EventBus.ALOUD_STATE) {
-            if (it == Status.STOP || it == Status.PAUSE) {
+            if (it == Status.STOP) {
                 ReadBook.curTextChapter?.let { textChapter ->
                     val page = textChapter.getPageByReadPos(ReadBook.durChapterPos)
                     if (page != null) {
@@ -1667,18 +1669,7 @@ class ReadBookActivity : BaseReadBookActivity(),
             }
         }
         observeEventSticky<Int>(EventBus.TTS_PROGRESS) { chapterStart ->
-            lifecycleScope.launch(IO) {
-                if (BaseReadAloudService.isPlay()) {
-                    ReadBook.curTextChapter?.let { textChapter ->
-                        ReadBook.durChapterPos = chapterStart
-                        val pageIndex = ReadBook.durPageIndex
-                        val aloudSpanStart = chapterStart - textChapter.getReadLength(pageIndex)
-                        textChapter.getPage(pageIndex)
-                            ?.upPageAloudSpan(aloudSpanStart)
-                        upContent()
-                    }
-                }
-            }
+            applyAloudSpan(chapterStart)
         }
         observeEvent<Boolean>(PreferKey.keepLight) {
             upScreenTimeOut()

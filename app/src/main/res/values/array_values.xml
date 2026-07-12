@@ -53,4 +53,16 @@
         <item>en</item>
     </string-array>
 
+    <string-array name="mimo_voice_values" translatable="false">
+        <item>mimo_default</item>
+        <item>冰糖</item>
+        <item>茉莉</item>
+        <item>苏打</item>
+        <item>白桦</item>
+        <item>Mia</item>
+        <item>Chloe</item>
+        <item>Milo</item>
+        <item>Dean</item>
+    </string-array>
+
 </resources>

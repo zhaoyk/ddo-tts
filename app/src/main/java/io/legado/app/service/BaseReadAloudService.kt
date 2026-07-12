@@ -88,6 +88,14 @@ abstract class BaseReadAloudService : BaseService(),
             return isRun && !pause
         }
 
+        /** 朗读进行中的章节索引（可与用户浏览章节不同） */
+        @JvmStatic
+        var aloudChapterIndex: Int = 0
+
+        /** 朗读进行中的章节内字符位置 */
+        @JvmStatic
+        var aloudChapterPos: Int = 0
+
         private const val TAG = "BaseReadAloudService"
 
     }
@@ -202,6 +210,7 @@ abstract class BaseReadAloudService : BaseService(),
         upMediaSessionPlaybackState(PlaybackStateCompat.STATE_STOPPED)
         mediaSessionCompat.release()
         ReadBook.uploadProgress()
+        ReadBook.aloudSyncView = false
         unregisterPhoneStateListener(phoneStateListener)
         upNotificationJob?.invokeOnCompletion {
             notificationManager.cancel(NotificationId.ReadAloudService)
@@ -271,6 +280,8 @@ abstract class BaseReadAloudService : BaseService(),
             }
             paragraphStartPos = pos
             waitNewReadAloud = false
+            aloudChapterIndex = ReadBook.durChapterIndex
+            aloudChapterPos = readAloudNumber + 1
             launch(Main) {
                 if (play) play() else pageChanged = true
             }
@@ -331,6 +342,7 @@ abstract class BaseReadAloudService : BaseService(),
     abstract fun upSpeechRate(reset: Boolean = false)
 
     fun upTtsProgress(progress: Int) {
+        aloudChapterPos = progress
         postEvent(EventBus.TTS_PROGRESS, progress)
     }
 
@@ -345,6 +357,7 @@ abstract class BaseReadAloudService : BaseService(),
                 readAloudNumber -= contentList[nowSpeak].length + 1 + paragraphStartPos
                 paragraphStartPos = 0
             } while (contentList[nowSpeak].matches(AppPattern.notReadAloudRegex))
+            var crossedPage = false
             textChapter?.let {
                 if (readAloudByPage) {
                     val paragraphs = it.getParagraphs(true)
@@ -352,10 +365,13 @@ abstract class BaseReadAloudService : BaseService(),
                 }
                 if (readAloudNumber < it.getReadLength(pageIndex)) {
                     pageIndex--
-                    ReadBook.moveToPrevPage()
+                    crossedPage = true
                 }
             }
             upTtsProgress(readAloudNumber + 1)
+            if (crossedPage) {
+                ReadBook.moveToPrevPage()
+            }
             play()
         } else {
             toLast = true
@@ -373,6 +389,7 @@ abstract class BaseReadAloudService : BaseService(),
             readAloudNumber += contentList[nowSpeak].length.plus(1) - paragraphStartPos
             paragraphStartPos = 0
             nowSpeak++
+            var crossedPage = false
             textChapter?.let {
                 if (readAloudByPage) {
                     val paragraphs = it.getParagraphs(true)
@@ -382,10 +399,13 @@ abstract class BaseReadAloudService : BaseService(),
                     && readAloudNumber >= it.getReadLength(pageIndex + 1)
                 ) {
                     pageIndex++
-                    ReadBook.moveToNextPage()
+                    crossedPage = true
                 }
             }
             upTtsProgress(readAloudNumber + 1)
+            if (crossedPage) {
+                ReadBook.moveToNextPage()
+            }
             play()
         } else {
             waitNewReadAloud = true
@@ -697,7 +717,22 @@ abstract class BaseReadAloudService : BaseService(),
     open fun prevChapter() {
         toLast = false
         resumeReadAloudInternal()
-        ReadBook.moveToPrevChapter(true, toLast = false)
+        if (!ReadBook.aloudSyncView) {
+            val prevIndex = aloudChapterIndex - 1
+            if (prevIndex < 0) {
+                stopSelf()
+                return
+            }
+            aloudChapterIndex = prevIndex
+            ReadBook.playAloudChapter(prevIndex)
+            return
+        }
+        ReadBook.allowTtsChapterChange = true
+        try {
+            ReadBook.moveToPrevChapter(true, toLast = false)
+        } finally {
+            ReadBook.allowTtsChapterChange = false
+        }
     }
 
     open fun nextChapter() {
@@ -710,8 +745,25 @@ abstract class BaseReadAloudService : BaseService(),
         ReadBook.upReadTime()
         AppLog.putDebug("${ReadBook.curTextChapter?.chapter?.title} 朗读结束跳转下一章并朗读")
         resumeReadAloudInternal()
-        if (!ReadBook.moveToNextChapter(true)) {
-            stopSelf()
+        if (!ReadBook.aloudSyncView) {
+            val nextIndex = aloudChapterIndex + 1
+            if (nextIndex >= ReadBook.simulatedChapterSize) {
+                stopSelf()
+                return
+            }
+            aloudChapterIndex = nextIndex
+            ReadBook.playAloudChapter(nextIndex)
+            return
+        }
+        ReadBook.allowTtsChapterChange = true
+        try {
+            if (!ReadBook.moveToNextChapter(true)) {
+                stopSelf()
+            } else {
+                aloudChapterIndex = ReadBook.durChapterIndex
+            }
+        } finally {
+            ReadBook.allowTtsChapterChange = false
         }
     }
 

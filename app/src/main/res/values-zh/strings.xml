@@ -141,6 +141,8 @@
     <string name="previous_chapter">上一章</string>
     <string name="pt_hide_status_bar">隐藏状态栏</string>
     <string name="ps_hide_status_bar">阅读界面隐藏状态栏</string>
+    <string name="go_to_aloud_page">去朗读页</string>
+    <string name="read_aloud_from_this_page">从本页读</string>
     <string name="read_aloud">朗读</string>
     <string name="read_aloud_t">正在朗读</string>
     <string name="read_aloud_s">点击打开阅读界面</string>
@@ -1231,4 +1233,20 @@
     <string name="auto_check_new_backup_t">自动检查新备份</string>
     <string name="auto_check_new_backup_s">打开软件时检查是否有新备份，有新备份时提示是否更新</string>
     <string name="sys_image_picker">系统图片选择器</string>
+    <string name="mimo_tts_buffering">MiMo 正在合成朗读音频</string>
+    <string name="mimo_tts_missing_key">请先在 MiMo TTS 设置中填写 API Key</string>
+    <string name="mimo_tts_auth_error">MiMo API Key 无效或没有调用权限</string>
+    <string name="mimo_tts_bad_request">MiMo 不接受当前正文或配置</string>
+    <string name="mimo_tts_rate_limited">MiMo 额度不足或请求受到限流</string>
+    <string name="mimo_tts_network_error">MiMo 音频生成失败，请检查网络后重试</string>
+    <string name="mimo_tts_response_error">MiMo 返回了无效音频</string>
+    <string name="mimo_tts_playback_error">MiMo 音频无法播放</string>
+    <string name="mimo_tts">MiMo TTS</string>
+    <string name="mimo_api_key">MiMo API Key</string>
+    <string name="mimo_voice">预置音色</string>
+    <string name="mimo_global_style">全局朗读风格</string>
+    <string name="mimo_book_style">本书朗读风格</string>
+    <string name="mimo_style_help">风格是表演指导，不会被朗读；本书留空时继承全局风格。</string>
+    <string name="mimo_clear_book_style">清除本书风格</string>
+    <string name="mimo_book_style_inherited">本书已恢复继承全局风格</string>
 </resources>

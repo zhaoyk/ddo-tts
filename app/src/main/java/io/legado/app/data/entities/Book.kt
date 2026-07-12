@@ -246,6 +246,12 @@ data class Book(
         return config.ttsEngine
     }
 
+    fun setMiMoTtsStyle(style: String?) {
+        config.mimoTtsStyle = style?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    fun getMiMoTtsStyle(): String? = config.mimoTtsStyle
+
     fun setSplitLongChapter(limitLongContent: Boolean) {
         config.splitLongChapter = limitLongContent
     }
@@ -402,7 +408,8 @@ data class Book(
         var readSimulating: Boolean = false,
         var startDate: LocalDate? = null,
         var startChapter: Int? = null,     // 用户设置的起始章节
-        var dailyChapters: Int = 3    // 用户设置的每日更新章节数
+        var dailyChapters: Int = 3,    // 用户设置的每日更新章节数
+        var mimoTtsStyle: String? = null
     ) : Parcelable
 
     class Converters {

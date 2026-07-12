@@ -114,4 +114,16 @@
         <item>自定义</item>
     </string-array>
 
+    <string-array name="mimo_voice_entries">
+        <item>MiMo 默认</item>
+        <item>冰糖 · 中文 · 女性</item>
+        <item>茉莉 · 中文 · 女性</item>
+        <item>苏打 · 中文 · 男性</item>
+        <item>白桦 · 中文 · 男性</item>
+        <item>Mia · 英文 · 女性</item>
+        <item>Chloe · 英文 · 女性</item>
+        <item>Milo · 英文 · 男性</item>
+        <item>Dean · 英文 · 男性</item>
+    </string-array>
+
 </resources>
