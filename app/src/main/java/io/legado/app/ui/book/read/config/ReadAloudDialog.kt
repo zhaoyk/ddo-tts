@@ -17,6 +17,7 @@ import io.legado.app.lib.dialogs.selector
 import io.legado.app.lib.theme.bottomBackground
 import io.legado.app.lib.theme.getPrimaryTextColor
 import io.legado.app.model.ReadAloud
+import io.legado.app.model.ReadAloudSpeed
 import io.legado.app.model.ReadBook
 import io.legado.app.service.BaseReadAloudService
 import io.legado.app.ui.book.read.ReadBookActivity
@@ -128,14 +129,10 @@ class ReadAloudDialog : BaseDialogFragment(R.layout.dialog_read_aloud) {
             upTtsSpeechRate()
         }
         ivTtsSpeechReduce.setOnClickListener {
-            seekTtsSpeechRate.progress = AppConfig.ttsSpeechRate - 1
-            AppConfig.ttsSpeechRate -= 1
-            upTtsSpeechRate()
+            adjustTtsSpeechRate(-1)
         }
         ivTtsSpeechAdd.setOnClickListener {
-            seekTtsSpeechRate.progress = AppConfig.ttsSpeechRate + 1
-            AppConfig.ttsSpeechRate += 1
-            upTtsSpeechRate()
+            adjustTtsSpeechRate(1)
         }
         ivTimer.setOnClickListener {
             AppConfig.ttsTimer = seekTimer.progress
@@ -149,6 +146,7 @@ class ReadAloudDialog : BaseDialogFragment(R.layout.dialog_read_aloud) {
             }
         }
         //设置保存的默认值
+        seekTtsSpeechRate.max = AppConfig.maxSpeechRate
         seekTtsSpeechRate.progress = AppConfig.ttsSpeechRate
         seekTtsSpeechRate.setOnSeekBarChangeListener(object : SeekBarChangeListener {
 
@@ -217,7 +215,16 @@ class ReadAloudDialog : BaseDialogFragment(R.layout.dialog_read_aloud) {
 
     @SuppressLint("SetTextI18n")
     private fun upTtsSpeechRateText(value: Int) {
-        binding.tvTtsSpeedValue.text = ((value + 5) / 10f).toString()
+        binding.tvTtsSpeedValue.text = ReadAloudSpeed.playbackSpeed(value).toString()
+    }
+
+    private fun adjustTtsSpeechRate(delta: Int) {
+        val current = AppConfig.ttsSpeechRate
+        val updated = ReadAloudSpeed.normalizeSetting(current + delta)
+        if (updated == current) return
+        binding.seekTtsSpeechRate.progress = updated
+        AppConfig.ttsSpeechRate = updated
+        upTtsSpeechRate()
     }
 
     private fun upTtsSpeechRate() {

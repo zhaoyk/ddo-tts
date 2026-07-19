@@ -207,12 +207,15 @@ class SpeakEngineDialog() : BaseDialogFragment(R.layout.dialog_recycler_view),
 
                     // 4. 构建弹窗并显示
                     AlertDialog.Builder(context)
-                        .setMessage("保存嗓音后需变更下语速才会使用新嗓音或者是等待读完缓存段落")
+                        .setMessage("朗读中保存嗓音后，将从当前段落重新加载音频")
                         .setView(spinner)
                         .setPositiveButton("保存") { dialog, _ ->
                             // 获取选中的选项并保存到缓存
                             val selectedValue = spinner.selectedItem.toString()
                             saveToSharedPref(context, cacheKey, selectedValue)
+                            if (selectedValue != cacheValue) {
+                                ReadAloud.refreshEdgeVoice(requireContext())
+                            }
                             Toast.makeText(context, "已选择：${selectedValue.take(20)}...", Toast.LENGTH_SHORT).show()
                             dialog.dismiss()
                         }

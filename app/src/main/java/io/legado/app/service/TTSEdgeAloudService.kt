@@ -25,8 +25,8 @@ import io.legado.app.constant.AppLog
 import io.legado.app.constant.AppPattern
 import io.legado.app.help.config.AppConfig
 import io.legado.app.help.coroutine.Coroutine
+import io.legado.app.model.ReadAloudSpeed
 import io.legado.app.model.ReadBook
-import io.legado.app.utils.MD5Utils
 import io.legado.app.utils.servicePendingIntent
 import io.legado.app.utils.toastOnUi
 import kotlinx.coroutines.CancellationException
@@ -75,7 +75,6 @@ class TTSEdgeAloudService : BaseReadAloudService(), Player.Listener {
             .build()
     }
     private val tag = "TTSEdgeAloudService"
-    private var speechRate: Int = AppConfig.speechRatePlay + 5
     private var downloadTask: Coroutine<*>? = null
     private var playIndexJob: Job? = null
     private var playErrorNo = 0
@@ -85,23 +84,24 @@ class TTSEdgeAloudService : BaseReadAloudService(), Player.Listener {
     private val audioCache = HashMap<String, ByteArray>()
     private val audioCacheList = arrayListOf<String>()
     private var previousMediaId = ""
-    private lateinit var ctx:Context
+    private lateinit var ctx: Context
 
     private val silentBytes: ByteArray by lazy {
         resources.openRawResource(R.raw.silent_sound).readBytes()
     }
 
     // 核心方法2：从SharedPreferences读取数据
-    private  fun getVoiceValue(defaultValue: String="晓晓@zh-CN-XiaoxiaoNeural"): String {
+    private fun getVoiceValue(defaultValue: String = "晓晓@zh-CN-XiaoxiaoNeural"): String {
         val sp = ctx.getSharedPreferences("TTS_CONFIG", Context.MODE_PRIVATE)
-        val cacheVoice =  sp.getString("tts_edge_voice", defaultValue) ?: defaultValue // 防止null
-        return cacheVoice.split("@")[1]
+        val cacheVoice = sp.getString("tts_edge_voice", defaultValue) ?: defaultValue
+        return cacheVoice.substringAfter('@', defaultValue.substringAfter('@'))
     }
 
     override fun onCreate() {
         super.onCreate()
         ctx = this
         exoPlayer.addListener(this)
+        exoPlayer.setPlaybackSpeed(ReadAloudSpeed.playbackSpeed(AppConfig.speechRatePlay))
     }
 
     override fun onDestroy() {
@@ -152,6 +152,7 @@ class TTSEdgeAloudService : BaseReadAloudService(), Player.Listener {
         downloadTask = execute {
             downloadTaskActiveLock.withLock {
                 ensureActive()
+                val voice = getVoiceValue()
                 contentList.forEachIndexed { index, content ->
                     ensureActive()
                     if (index < nowSpeak) return@forEachIndexed
@@ -159,12 +160,12 @@ class TTSEdgeAloudService : BaseReadAloudService(), Player.Listener {
                     if (paragraphStartPos > 0 && index == nowSpeak) {
                         text = text.substring(paragraphStartPos)
                     }
-                    val fileName = md5SpeakFileName(text)
+                    val fileName = md5SpeakFileName(voice, text)
                     val speakText = text.replace(AppPattern.notReadAloudRegex, "")
                     if (!isCached(fileName)) {
                         Log.i(tag, "无缓存down===> $speakText  MD5:$fileName")
                         runCatching {
-                            getSpeakStream(speakText, fileName)
+                            getSpeakStream(speakText, fileName, voice)
                         }.onFailure {
                             Log.e(tag, "downloadAndPlayAudios runCatch onFailure", it)
                             when (it) {
@@ -202,13 +203,14 @@ class TTSEdgeAloudService : BaseReadAloudService(), Player.Listener {
         val contentList =
             textChapter.getNeedReadAloud(0, readAloudByPage, 0, 1).splitToSequence("\n")
                 .filter { it.isNotEmpty() }.take(10).toList()
+        val voice = getVoiceValue()
         contentList.forEach { content ->
             coroutineContext.ensureActive()
-            val fileName = md5SpeakFileName(content)
+            val fileName = md5SpeakFileName(voice, content)
             val speakText = content.replace(AppPattern.notReadAloudRegex, "")
             if (!isCached(fileName)) {
                 runCatching {
-                    getSpeakStream(speakText, fileName, notifySlowNetwork = false)
+                    getSpeakStream(speakText, fileName, voice, notifySlowNetwork = false)
                     Log.i(tag, "pre预下载音频===> $speakText MD5:$fileName")
                 }.onFailure {
                     Log.e(tag, "preDownloadAudios runCatch onFailure", it)
@@ -220,6 +222,7 @@ class TTSEdgeAloudService : BaseReadAloudService(), Player.Listener {
     private suspend fun getSpeakStream(
         speakText: String,
         fileName: String,
+        voice: String,
         notifySlowNetwork: Boolean = true
     ): String {
         if (speakText.isEmpty()) {
@@ -246,7 +249,6 @@ class TTSEdgeAloudService : BaseReadAloudService(), Player.Listener {
                     )
                 }
                 try {
-                    val voice = getVoiceValue()
                     val bytes = fetchSpeakBytes(speakText, voice, remainingMillis)
                     if (bytes.isEmpty()) {
                         throw IOException("Edge TTS 未返回音频数据")
@@ -290,7 +292,7 @@ class TTSEdgeAloudService : BaseReadAloudService(), Player.Listener {
         timeoutMillis: Long
     ): ByteArray = coroutineScope {
         val fetchJob = async(Dispatchers.IO) {
-            edgeSpeakFetch.synthesizeText(speakText, speechRate, voice).use {
+            edgeSpeakFetch.synthesizeText(speakText, voice).use {
                 it.toByteArray()
             }
         }
@@ -315,9 +317,8 @@ class TTSEdgeAloudService : BaseReadAloudService(), Player.Listener {
         }
     }
 
-    private fun md5SpeakFileName(content: String): String {
-        return MD5Utils.md5Encode16(MD5Utils.md5Encode16("$speechRate|$content"))
-    }
+    private fun md5SpeakFileName(voice: String, content: String): String =
+        EdgeTtsConfig.cacheKey(voice, content)
 
     override fun pauseReadAloud(abandonFocus: Boolean) {
         super.pauseReadAloud(abandonFocus)
@@ -358,9 +359,14 @@ class TTSEdgeAloudService : BaseReadAloudService(), Player.Listener {
             if (speakTextLength <= 0) {
                 return@launch
             }
-            val sleep = exoPlayer.duration / speakTextLength
+            val speed = ReadAloudSpeed.playbackSpeed(AppConfig.speechRatePlay)
+            val sleep = ReadAloudSpeed.characterDelayMillis(
+                exoPlayer.duration,
+                speakTextLength,
+                speed
+            )
             val start = speakTextLength * exoPlayer.currentPosition / exoPlayer.duration
-            for (i in start..contentList[nowSpeak].length) {
+            for (i in start until contentList[nowSpeak].length) {
                 if (pageIndex + 1 < textChapter.pageSize && readAloudNumber + i > textChapter.getReadLength(
                         pageIndex + 1
                     )
@@ -378,12 +384,12 @@ class TTSEdgeAloudService : BaseReadAloudService(), Player.Listener {
      * 更新朗读速度
      */
     override fun upSpeechRate(reset: Boolean) {
-        downloadTask?.cancel()
-        edgeSpeakFetch.cancelCurrent()
-        exoPlayer.stop()
-        speechRate = AppConfig.speechRatePlay + 5
-        downloadAndPlayAudios()
+        exoPlayer.setPlaybackSpeed(ReadAloudSpeed.playbackSpeed(AppConfig.speechRatePlay))
+        upPlayPos()
+    }
 
+    override fun refreshTtsVoice() {
+        reloadAudio()
     }
 
     /**

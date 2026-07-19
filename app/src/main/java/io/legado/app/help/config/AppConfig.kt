@@ -6,6 +6,7 @@ import io.legado.app.BuildConfig
 import io.legado.app.constant.AppConst
 import io.legado.app.constant.PreferKey
 import io.legado.app.data.appDb
+import io.legado.app.model.ReadAloudSpeed
 import io.legado.app.utils.canvasrecorder.CanvasRecorderFactory
 import io.legado.app.utils.getPrefBoolean
 import io.legado.app.utils.getPrefInt
@@ -263,12 +264,16 @@ object AppConfig : SharedPreferences.OnSharedPreferenceChangeListener {
     val noAnimScrollPage: Boolean
         get() = appCtx.getPrefBoolean(PreferKey.noAnimScrollPage, false)
 
-    const val defaultSpeechRate = 5
+    const val minSpeechRate = ReadAloudSpeed.MIN_SETTING
+    const val defaultSpeechRate = ReadAloudSpeed.DEFAULT_SETTING
+    const val maxSpeechRate = ReadAloudSpeed.MAX_SETTING
 
     var ttsSpeechRate: Int
-        get() = appCtx.getPrefInt(PreferKey.ttsSpeechRate, defaultSpeechRate)
+        get() = ReadAloudSpeed.normalizeSetting(
+            appCtx.getPrefInt(PreferKey.ttsSpeechRate, defaultSpeechRate)
+        )
         set(value) {
-            appCtx.putPrefInt(PreferKey.ttsSpeechRate, value)
+            appCtx.putPrefInt(PreferKey.ttsSpeechRate, ReadAloudSpeed.normalizeSetting(value))
         }
 
     var ttsTimer: Int
@@ -739,4 +744,3 @@ object AppConfig : SharedPreferences.OnSharedPreferenceChangeListener {
         }
 
 }
-

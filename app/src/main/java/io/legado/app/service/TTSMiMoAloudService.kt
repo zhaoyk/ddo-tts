@@ -15,11 +15,11 @@ import io.legado.app.R
 import io.legado.app.constant.AppLog
 import io.legado.app.constant.AppPattern
 import io.legado.app.help.config.AppConfig
+import io.legado.app.model.ReadAloudSpeed
 import io.legado.app.model.ReadBook
 import io.legado.app.service.mimo.MiMoCacheRetention
 import io.legado.app.service.mimo.MiMoGenerationFailure
 import io.legado.app.service.mimo.MiMoMemoryDataSourceFactory
-import io.legado.app.service.mimo.MiMoPlaybackMath
 import io.legado.app.service.mimo.MiMoPlaybackRecovery
 import io.legado.app.service.mimo.MiMoPrefetchPlan
 import io.legado.app.service.mimo.MiMoRecoveryDecision
@@ -75,7 +75,7 @@ class TTSMiMoAloudService : BaseReadAloudService(), Player.Listener {
     override fun onCreate() {
         super.onCreate()
         exoPlayer.addListener(this)
-        exoPlayer.setPlaybackSpeed(MiMoPlaybackMath.playbackSpeed(AppConfig.speechRatePlay))
+        exoPlayer.setPlaybackSpeed(ReadAloudSpeed.playbackSpeed(AppConfig.speechRatePlay))
     }
 
     override fun onDestroy() {
@@ -128,7 +128,7 @@ class TTSMiMoAloudService : BaseReadAloudService(), Player.Listener {
     }
 
     override fun upSpeechRate(reset: Boolean) {
-        exoPlayer.setPlaybackSpeed(MiMoPlaybackMath.playbackSpeed(AppConfig.speechRatePlay))
+        exoPlayer.setPlaybackSpeed(ReadAloudSpeed.playbackSpeed(AppConfig.speechRatePlay))
         updateProgressLoop()
     }
 
@@ -475,8 +475,8 @@ class TTSMiMoAloudService : BaseReadAloudService(), Player.Listener {
         if (duration <= 0 || segment.text.isEmpty()) return
         progressJob = lifecycleScope.launch {
             upTtsProgress(readAloudNumber + segment.leadingOffset + 1)
-            val speed = MiMoPlaybackMath.playbackSpeed(AppConfig.speechRatePlay)
-            val delayMs = MiMoPlaybackMath.characterDelayMillis(duration, segment.text.length, speed)
+            val speed = ReadAloudSpeed.playbackSpeed(AppConfig.speechRatePlay)
+            val delayMs = ReadAloudSpeed.characterDelayMillis(duration, segment.text.length, speed)
             val start = (segment.text.length * exoPlayer.currentPosition / duration).toInt()
             for (offset in start until segment.text.length) {
                 val originalOffset = segment.leadingOffset + offset

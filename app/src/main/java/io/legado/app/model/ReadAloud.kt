@@ -138,6 +138,16 @@ object ReadAloud {
         }
     }
 
+    fun refreshEdgeVoice(context: Context) {
+        if (!BaseReadAloudService.isRun || !ttsEngine.orEmpty().contains("edgeinner")) {
+            return
+        }
+        Intent(context, TTSEdgeAloudService::class.java).also {
+            it.action = IntentAction.refreshTtsVoice
+            context.startForegroundServiceCompat(it)
+        }
+    }
+
     fun refreshMiMoConfig(context: Context) {
         if (!BaseReadAloudService.isRun ||
             !ttsEngine.orEmpty().contains(MiMoTtsContract.ENGINE_VALUE)

@@ -274,13 +274,13 @@ BaseService
 | 项目 | 内容 |
 |------|------|
 | 网络 | `EdgeSpeakFetch.synthesizeText()` → WebSocket 音频流 |
-| 缓存 | `HashMap<String, ByteArray> audioCache`，key = `md5(md5(speechRate\|content))` |
-| 播放 | Media3 `ExoPlayer` + `ByteArrayDataSource`（URI `memory://media/{id}`） |
+| 缓存 | `HashMap<String, ByteArray> audioCache`，key 由 Edge 音色与段落正文生成，不包含播放倍速 |
+| 播放 | Media3 `ExoPlayer` + `ByteArrayDataSource`（URI `memory://media/{id}`）；`(AppConfig.speechRatePlay + 5) / 10f` 本地调速 |
 | 流程 | `downloadAndPlayAudios()`：遍历 `contentList` 下载缺失段 → `addMediaItem` → `preDownloadAudios()` 预取下一章前 10 段 |
-| 进度 | `upPlayPos()` 按 `duration/textLength` 定时 `delay` 模拟字级进度（非精确对齐） |
+| 进度 | `upPlayPos()` 按 `duration/textLength/playbackSpeed` 定时 `delay` 模拟字级进度（非精确对齐） |
 | 缓存回收 | `removeUnUseCache()` 根据 `previousMediaId` 删掉已播段内存 |
 | 失败 | 连续 5 次 `onPlayerError` → `reloadAudio()` 或暂停 |
-| 嗓音 | `SharedPreferences("TTS_CONFIG").tts_edge_voice` |
+| 嗓音 | `SharedPreferences("TTS_CONFIG").tts_edge_voice`；保存后通过独立 Service action 清缓存并从当前段落重新合成 |
 
 **同文件底部**：`ByteArrayDataSource` / `ByteArrayDataSourceFactory`（ExoPlayer 自定义数据源）。
 
@@ -291,6 +291,7 @@ BaseService
 | 连接 | `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1` |
 | 鉴权 | `Sec-MS-GEC`、`TrustedClientToken`、`CHROMIUM_FULL_VERSION`（143.0.3650.75） |
 | 数据 | 二进制帧解析头部后写入 `PipedOutputStream` → 返回 `InputStream` |
+| 语速 | SSML 固定 `<prosody rate="+0%">`，实际倍速由 `TTSEdgeAloudService` 的 ExoPlayer 控制 |
 | 释放 | `release()` 关闭 WebSocket |
 
 修改 Edge 版本或协议时**主要改此文件**。
@@ -455,7 +456,7 @@ flowchart TB
 |------------------|------|
 | `ttsEngine` / `AppConfig.ttsEngine` | 全局引擎字符串 |
 | `ttsFollowSys` / `ttsFlowSys` | 语速是否跟随系统 TTS |
-| `ttsSpeechRate` | 语速 SeekBar 0–?（播放时 `(+5)/10f` 或 Edge 的 `speechRatePlay+5`） |
+| `ttsSpeechRate` | 语速 SeekBar 0–45，对应 `0.5x–5.0x`；读写均钳制到合法范围 |
 | `speechRatePlay` | 实际用于播放的语速值 |
 | `ttsTimer` | 默认定时分钟 |
 | `tts_mimo_api_key` / `tts_mimo_voice` / `tts_mimo_style` | `TTS_CONFIG` 中的 MiMo 全局 Key、预置音色和风格（Key 明文存储） |
@@ -511,7 +512,7 @@ flowchart LR
 ```
 
 **修改缓存策略**：改 `TTSEdgeAloudService` 的 `cacheAudio` / `removeUnUseCache` / `removeAllCache`。  
-**修改音色/语速**：嗓音 `SpeakEngineDialog` + `getVoiceValue`；语速 `AppConfig.speechRatePlay` → `speechRate` 参与 `md5SpeakFileName`。
+**修改音色/语速**：嗓音由 `SpeakEngineDialog` 保存并触发独立刷新；语速通过 `ReadAloudSpeed` 转为 ExoPlayer 本地倍速，不参与 Edge 合成和缓存键。
 
 ---
 
@@ -572,7 +573,7 @@ flowchart LR
 | 改 Edge 协议/版本 | `EdgeSpeakFetch.kt` |
 | 改 Edge 缓存（磁盘/ LRU 等） | `TTSEdgeAloudService.kt` |
 | 改 MiMo 协议、预置音色或请求重试 | `service/mimo/MiMoTtsProtocol.kt`、`MiMoTtsConfig.kt`、`MiMoTtsClient.kt`、`MiMoRetryPolicy.kt` |
-| 改 MiMo 合成/缓存/预取或本地倍速 | `TTSMiMoAloudService.kt`、`service/mimo/MiMoSegment.kt`、`MiMoMemoryDataSource.kt`、`MiMoPlaybackMath.kt` |
+| 改 MiMo 合成/缓存/预取或本地倍速 | `TTSMiMoAloudService.kt`、`service/mimo/MiMoSegment.kt`、`MiMoMemoryDataSource.kt`、`model/ReadAloudSpeed.kt` |
 | 改 Edge 音色列表/UI | `SpeakEngineDialog.kt`（voiceOptions）、`getVoiceValue` |
 | 改朗读面板按钮/布局 | `ReadAloudDialog.kt`、`dialog_read_aloud.xml` |
 | 改朗读与手动翻页联动 / 高亮跟随 | `ReadBook.kt`（§3.3）、`ReadBookActivity.applyAloudSpan`、`BaseReadAloudService`（`aloudChapter*`、`nextChapter`） |
@@ -590,6 +591,7 @@ flowchart LR
 
 ### model
 - `model/ReadAloud.kt` — 调度门面
+- `model/ReadAloudSpeed.kt` — Edge/MiMo 共用的本地播放倍速与高亮延迟计算
 - `model/ReadBook.kt` — `readAloud()`、视图解耦（`aloudSyncView`、`tryAutoRejoinAloudSync`、`goToAloudPage`）
 
 ### service
@@ -606,7 +608,6 @@ flowchart LR
 - `service/mimo/MiMoTtsConfig.kt` — 全局配置和单书风格解析
 - `service/mimo/MiMoSegment.kt` — 规范化段落和内存缓存签名
 - `service/mimo/MiMoMemoryDataSource.kt` — ExoPlayer 内存 WAV DataSource
-- `service/mimo/MiMoPlaybackMath.kt` — 本地播放倍速计算
 - `service/mimo/MiMoRetryPolicy.kt` — 重试与失败分类
 - `service/mimo/MiMoLifecycle.kt` — 串行工作代次、取消与预取状态
 - `service/mimo/MiMoTtsException.kt` — 安全错误类型与用户提示分类

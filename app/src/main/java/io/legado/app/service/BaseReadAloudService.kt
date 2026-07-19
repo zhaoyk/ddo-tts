@@ -228,6 +228,7 @@ abstract class BaseReadAloudService : BaseService(),
             IntentAction.pause -> pauseReadAloud()
             IntentAction.resume -> resumeReadAloud()
             IntentAction.upTtsSpeechRate -> upSpeechRate(true)
+            IntentAction.refreshTtsVoice -> refreshTtsVoice()
             IntentAction.prevParagraph -> prevP()
             IntentAction.nextParagraph -> nextP()
             IntentAction.prev -> prevChapter()
@@ -340,6 +341,8 @@ abstract class BaseReadAloudService : BaseService(),
     }
 
     abstract fun upSpeechRate(reset: Boolean = false)
+
+    protected open fun refreshTtsVoice() = Unit
 
     fun upTtsProgress(progress: Int) {
         aloudChapterPos = progress

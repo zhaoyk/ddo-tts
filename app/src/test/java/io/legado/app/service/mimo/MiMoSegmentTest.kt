@@ -1,5 +1,6 @@
 package io.legado.app.service.mimo
 
+import io.legado.app.model.ReadAloudSpeed
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Test
@@ -36,7 +37,7 @@ class MiMoSegmentTest {
     fun `media identity changes with paragraph position but not playback speed`() {
         val config = MiMoTtsConfig("key-a", "冰糖", "平静")
         val segment = MiMoSegment.create(1, 2, "正文", config)
-        val speeds = listOf(5, 10).map(MiMoPlaybackMath::playbackSpeed)
+        val speeds = listOf(5, 10).map(ReadAloudSpeed::playbackSpeed)
 
         assertEquals(listOf(1.0f, 1.5f), speeds)
         assertEquals(segment, MiMoSegment.create(1, 2, "正文", config))

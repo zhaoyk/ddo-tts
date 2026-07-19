@@ -243,7 +243,6 @@ class EdgeSpeakFetch {
 
     fun synthesizeText(
         speakText: String,
-        rate: Int,
         voice: String = DEFAULT_VOICE
     ): InputStream {
         cancelCurrent()
@@ -251,7 +250,7 @@ class EdgeSpeakFetch {
         Log.i(TAG, "speakText: $speakText")
         try {
             val speakTextStr = removeSpecialCharacters(speakText)
-            val ssml = mkSSML(speakTextStr, voice, processRate(rate))
+            val ssml = EdgeTtsConfig.buildSsml(speakTextStr, voice)
             getWssConnect(ssml)
             Log.i(TAG, "重新生成websocket, sendSpeechConfig")
         } catch (e: Exception) {
@@ -259,24 +258,6 @@ class EdgeSpeakFetch {
             closeAudioStream("发送 Edge TTS 请求失败", e)
         }
         return audioInputStream
-    }
-
-    // 构造SSML文本
-    private fun mkSSML(
-        text: String,
-        voice: String,
-        rate: String,
-        pitch: String = "+0Hz",
-        volume: String = "+0%"
-    ): String {
-        return String.format(
-            "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>" +
-                    "<voice name='%s'>" +
-                    "<prosody pitch='%s' rate='%s' volume='%s'>%s</prosody>" +
-                    "</voice>" +
-                    "</speak>",
-            voice, pitch, rate, volume, text
-        )
     }
 
     // 发送speech.config消息
@@ -316,17 +297,6 @@ class EdgeSpeakFetch {
     // 生成无破折号的UUID
     private fun connectID(): String {
         return UUID.randomUUID().toString().replace("-".toRegex(), "")
-    }
-
-    // 生成带符号的百分比字符串
-    private fun processRate(rate: Int): String {
-        val rateOffset = rate - 12
-        val customRate = if (rateOffset > 0) {
-            "+$rateOffset%"
-        } else {
-            "$rateOffset%"
-        }
-        return customRate
     }
 
     fun release() {
